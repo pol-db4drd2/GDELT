@@ -1,0 +1,243 @@
+---
+title: "Create CCES data set with ACS"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{1_CCES_ACS}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+######## <!-- process cces -->
+
+```{r unzip_cces}
+# NEW: can't distribute CCES Stata files via github unless compressed ----
+dir.create(here::here("data", "cces", "main")) # may always be superfluous
+
+cces <- dir("data/cces/zip", full.names = TRUE)
+cces <- `names<-`(cces, stringr::str_extract(cces, "\\d+"))
+cces <- as.list(cces)
+cces <- dplyr::as_tibble(cces)
+cces <- tidyr::gather(cces, "year", "zipfile")
+cces <- dplyr::group_by(cces, .data$year)
+
+cces <- dplyr::transmute(cces, filename = unzip(dplyr::first(.data$zipfile),
+                                                exdir = here::here("data", "cces", "main")))
+```
+```{r ingest_cces}
+cces <- dplyr::transmute(cces, data = list(haven::read_dta(dplyr::first(.data$filename))))
+```
+```{r pull_cols_cces}
+# find the right column IDs for the variables we want each year ----
+# and select those columns from the year's data
+cols <- readr::read_csv("data/cces/columns.csv") # constructed by hand from the yearly codebooks
+cols <- tidyr::gather(cols, "year", "colname", -.data$var)
+cols <- dplyr::filter_all(cols, function(i) {!is.na(i)})
+cols <- dplyr::group_by(cols, .data$year)
+cols <- dplyr::summarise(cols, cols = list(`names<-`(.data$colname, .data$var)))
+cols <- dplyr::group_by(cols, .data$year)
+cols <- dplyr::mutate(cols, cols = list(as.list(dplyr::first(.data$cols))))
+cols <- dplyr::left_join(cols, cces)
+cols <- dplyr::mutate(cols, data = list(
+  do.call(dplyr::select, c(list(.data = dplyr::first(.data$data)), dplyr::first(.data$cols)))
+))
+```
+```{r tabulate_cces, eval=FALSE, include=FALSE}
+# tabs <- dplyr::select(tabs, .data$data)
+# tabs <- dplyr::mutate(tabs, data = list(dplyr::mutate_if(dplyr::first(.data$data), haven::is.labelled, haven::as_factor)))
+# tabs <- dplyr::mutate(tabs, data = list(dplyr::mutate_all(dplyr::first(.data$data), as.character))) # look out
+# tabs <- tidyr::unnest(tabs, .data$data)
+# tabs <- dplyr::mutate_all(tabs, stringr::str_to_lower)
+# 
+# tabs <- dplyr::select(cols, 
+#                       -.data$ww_weight, 
+#                       -.data$dd_county_fips, 
+#                       -.data$dd_county_name, 
+#                       -.data$dd_months_in_city, 
+#                       -.data$dd_years_in_city)
+# tabs <- tidyr::gather(tabs, "var", "val", -.data$year)
+# tabs <- dplyr::group_by(tabs, .data$var)
+# tabs <- dplyr::summarise(tabs, tab = list(table(.data$val, .data$year)))
+# tabs <- dplyr::group_by(tabs, .data$var)
+# tabs <- dplyr::mutate(tabs, tab = list(dplyr::first(.data$tab)[, colSums(dplyr::first(.data$tab)) > 0, drop=FALSE]))
+# # tabs <- dplyr::mutate(tabs, kable = paste(knitr::kable(dplyr::first(.data$tab), align="r"), collapse="\n"))
+# tabs <- dplyr::mutate(tabs, kable = list(pander::pandoc.table.return(dplyr::first(.data$tab),
+#                                                                      justify="right",
+#                                                                      style="multiline", 
+#                                                                      split.tables=Inf)))
+# tabs <- dplyr::mutate(tabs, kable = paste0("\\blimp\n\n## ", .data$var, "\n\n", .data$kable, "\n\n\\elimp\n\n"))
+# 
+# invisible(lapply(tabs$kable, cat))
+```
+```{r tabulate_cols, eval=FALSE, include=FALSE}
+# tabs <- dplyr::select(cols, .data$data)
+# tabs <- dplyr::mutate(tabs, data = list(dplyr::select_if(dplyr::first(.data$data), haven::is.labelled)))
+# # tabs <- dplyr::mutate(tabs, data = list(dplyr::mutate_all(dplyr::first(.data$data), haven::as_factor)))
+# tabs <- dplyr::mutate(tabs, data = list(dplyr::summarise_all(dplyr::first(.data$data), function(x) {list(attr(x, "labels", TRUE))})))
+# tabs <- tidyr::unnest(tabs, .data$data)
+# tabs <- dplyr::select(tabs, -.data$dd_state)
+# tabs <- tidyr::gather(tabs, "var", "labs", -.data$year)
+# tabs <- dplyr::filter(tabs, !sapply(.data$labs, is.null))
+# tabs <- dplyr::group_by(tabs, .data$var, add=TRUE)
+# tabs <- dplyr::mutate(tabs, labs = list(`names<-`(names(dplyr::first(.data$labs)), dplyr::first(.data$labs))))
+# tabs <- dplyr::mutate(tabs, labs = list(as.list(dplyr::first(.data$labs))))
+# tabs <- dplyr::mutate(tabs, labs = list(dplyr::as_tibble(dplyr::first(.data$labs))))
+# tabs <- dplyr::group_by(tabs, .data$var)
+# tabs <- tidyr::nest(tabs)
+# tabs <- dplyr::mutate(tabs, data = list(tidyr::unnest(dplyr::first(.data$data))))
+# 
+# tabs <- dplyr::mutate(tabs, kable = list(pander::pandoc.table.return(dplyr::first(.data$data),
+#                                                                      justify="right",
+#                                                                      style="multiline", 
+#                                                                      split.tables=Inf)))
+# tabs <- dplyr::mutate(tabs, kable = paste0("\\blimp\n\n## ", .data$var, "\n\n", .data$kable, "\n\n\\elimp\n\n"))
+# tabs <- dplyr::arrange(tabs,
+#                        !.data$var <= "dd_education",
+#                        !.data$var == "dd_gender",
+#                        !.data$var <= "dd_race",
+#                        !.data$var == "dd_religiosity",
+#                        .data$var)
+# 
+# invisible(lapply(tabs$kable, cat))
+```
+```{r mend_cols_cces}
+# iron out trivial differences in factor labels across years ----
+# otherwise they won't tidyr::unnest() together
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data), haven::is.labelled, function(x) {
+  `attr<-`(x, "labels", `names<-`(attr(x, "labels", TRUE), stringr::str_to_lower(names(attr(x, "labels", TRUE)))))
+})))
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data), haven::is.labelled, function(x) {
+  `attr<-`(x, "labels", `names<-`(attr(x, "labels", TRUE), stringr::str_trim(names(attr(x, "labels", TRUE)))))
+})))
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data), haven::is.labelled, function(x) {
+  `attr<-`(x, "labels", `names<-`(attr(x, "labels", TRUE), stringr::str_replace_all(names(attr(x, "labels", TRUE)), "  +", " ")))
+})))
+
+# for these columns labels differ across years but levels do not; attach labels later ----
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data), 
+                                                         colnames(dplyr::first(.data$data)) %in% c("dd_months_in_city",
+                                                                                                   "dd_years_in_city",
+                                                                                                   "dd_national_economy",
+                                                                                                   "dd_residency",
+                                                                                                   "dd_union_family",
+                                                                                                   "dd_union_self",
+                                                                                                   "ww_weight",
+                                                                                                   "vv_weight",
+                                                                                                   "dd_county_fips",
+                                                                                                   "dd_zip",
+                                                                                                   "pp_attend_meeting",
+                                                                                                   "pp_campaign_work",
+                                                                                                   "pp_post_sign"), as.numeric)))
+
+# make factors -- levels should now be compatible? ----
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data), haven::is.labelled, haven::as_factor)))
+
+# coerce just a couple to character ----
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data), 
+                                                         colnames(dplyr::first(.data$data)) %in% c("dd_state", 
+                                                                                                   # "dd_zip",
+                                                                                                   "dd_county_name",
+                                                                                                   "dd_party_reg",
+                                                                                                   "vv_party_reg"), as.character)))
+# cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data),
+#                                                          colnames(dplyr::first(.data$data)) == "dd_zip",
+#                                                          as.numeric)))
+cols <- dplyr::mutate(cols, data = list(dplyr::mutate_if(dplyr::first(.data$data),
+                                                         colnames(dplyr::first(.data$data)) == "vv_party_reg",
+                                                         stringr::str_to_lower)))
+```
+```{r unnest_cols_cces}
+# unnest the data ----
+set <- dplyr::select(cols, -.data$cols)
+set <- tidyr::unnest(set,  .data$data)
+
+# eliminate categories that aren't meaningful ----
+set <- dplyr::mutate_if(set, is.factor, function(x) { # set non-substantive answers to NA
+  factor(x, levels = setdiff(levels(x), c("skipped", "not asked", "prefer not to say", "not sure")))
+})
+set <- dplyr::mutate_at(set, "dd_income_new", function(x) { # a few folks were given bogus categories for dd_income_new
+  factor(x, levels = setdiff(levels(x), c("$150,000 or more", "$250,000 or more")))
+})
+
+# eliminate no-good numeric values ----
+set <- dplyr::mutate(set, 
+                     dd_residency      = ifelse(.data$dd_residency      == 7,  6, .data$dd_residency),
+                     dd_years_in_city  = ifelse(.data$dd_years_in_city  <  0, NA, .data$dd_years_in_city),
+                     dd_months_in_city = ifelse(.data$dd_months_in_city <  0, NA, .data$dd_months_in_city))
+
+# insert levels for factors whose levels differed substantially across years ----
+set <- dplyr::mutate(set,
+                     dd_union_family     = factor(.data$dd_union_family,     levels = 1:3, labels = c("is", "was", "no")),
+                     dd_union_self       = factor(.data$dd_union_self,       levels = 1:3, labels = c("is", "was", "no")),
+                     pp_attend_meeting   = factor(.data$pp_attend_meeting,   levels = 1:2, labels = c("yes", "no")),
+                     pp_campaign_work    = factor(.data$pp_campaign_work,    levels = 1:2, labels = c("yes", "no")),
+                     pp_post_sign        = factor(.data$pp_post_sign,        levels = 1:2, labels = c("yes", "no")),
+                     dd_national_economy = factor(.data$dd_national_economy, levels = 1:5, labels = c("much better",
+                                                                                                      "better",
+                                                                                                      "about the same",
+                                                                                                      "worse",
+                                                                                                      "much worse")),
+                     dd_residency        = factor(.data$dd_residency,        levels = 1:6, labels = c("under 1 month",
+                                                                                                      "1 to 6 months",
+                                                                                                      "7 to 11 months",
+                                                                                                      "1 to 2 years",
+                                                                                                      "3 to 4 years",
+                                                                                                      "5 or more years")))
+
+# disentangle self-reported party registration ----
+set <- dplyr::mutate(set,
+                     dd_democratic  = sapply(stringr::str_detect(.data$dd_party_reg, "^dem"),              isTRUE),
+                     dd_republican  = sapply(stringr::str_detect(.data$dd_party_reg, "^rep"),              isTRUE),
+                     dd_third_party = sapply(stringr::str_detect(.data$dd_party_reg, "(green|lib|other)"), isTRUE),
+                     dd_no_party    = !(.data$dd_democratic | .data$dd_republican | .data$dd_third_party))
+
+# disentangle validated party registration ----
+set <- dplyr::mutate(set, vv_party_reg = factor(.data$vv_party_reg, levels = setdiff(unique(.data$vv_party_reg), "")))
+set <- dplyr::mutate(set,
+                     vv_democratic  = (.data$vv_party_reg == "dem"),
+                     vv_republican  = (.data$vv_party_reg == "rep"),
+                     vv_unk_party   = (.data$vv_party_reg == "unk"),
+                     vv_independent = (.data$vv_party_reg == "ind"),
+                     vv_third_party = !(.data$vv_democratic | .data$vv_republican | .data$vv_unk_party | .data$vv_independent))
+
+# standardize citizenship and union status ----
+set <- dplyr::mutate(set,
+                     dd_citizen        = ifelse(is.na(.data$dd_citizenship_old),
+                                                .data$dd_citizenship_new == "yes",
+                                                .data$dd_citizenship_old != "immigrant non-citizen"),
+                     dd_union_self_now = ifelse(is.na(.data$dd_union_self),
+                                                as.numeric(.data$dd_union_either) %in% c(2, 4),
+                                                .data$dd_union_self == "is"),
+                     dd_union_self_now = ifelse(is.na(.data$dd_union_family),
+                                                as.numeric(.data$dd_union_either) %in% c(3, 4),
+                                                .data$dd_union_family == "is"))
+```
+```{r process_counties_cces}
+# smash in county IDs from the cumulative file b/c they are missing in the 2017 file ----
+cml <- readRDS(here::here("data", "cces", "cumulative_2006_2018.Rds"))
+cml <- dplyr::filter(cml, .data$year == 2017)
+cml <- dplyr::select(cml, dd_case_id = .data$case_id, dd_real_county_fips = .data$county_fips)
+cml <- dplyr::mutate_all(cml, as.numeric)
+set <- dplyr::left_join(set, cml)
+set <- dplyr::mutate(set, dd_county_fips = ifelse(is.na(.data$dd_real_county_fips), .data$dd_county_fips, .data$dd_real_county_fips))
+
+# standardize 3-digit county FIPS to omit leading 2-digit state FIPS ----
+set <- dplyr::mutate(set, dd_county_fips = .data$dd_county_fips %% 1000)
+```
+```{r save_set}
+saveRDS(set, here::here("data", "cces.rds"))
+```
+
+####### <!-- text -->
+
+```{r finish_set}
+all <- dplyr::left_join(set, aca)
+
+haven::write_dta(all, here::here("data", "cces", "CCES_with_ACS.dta"))
+```

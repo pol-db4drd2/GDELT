@@ -1,0 +1,275 @@
+---
+title: "Create American CCES+ACS+GDELT data set(s)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{CCES}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r load_CCES}
+# a merged file of ACS and CCES data was created previously
+# it's pretty large
+CCES <- haven::read_dta(here::here("data", "cces", "CCES_with_ACS.dta"))
+CCES <- dplyr::mutate(CCES, dplyr::across(tidyselect:::where(haven::is.labelled), haven::as_factor))
+```
+
+```{r load_tigris}
+# load county boundaries
+# see, GDELT doesn't say what administrative units within countries events happened in
+# but it provides lat-lon coordinates, so we'll just join those to a US map and figure it out
+bord <- tidycensus::get_acs("county", "B01001_001", geometry = TRUE)
+bord <- dplyr::mutate(bord,
+                      dd_state_fips  = as.numeric(stringr::str_sub(.data$GEOID,  1,  2)),
+                      dd_county_fips = as.numeric(stringr::str_sub(.data$GEOID, -3, -1)))
+bord <- dplyr::group_by(bord, .data$GEOID)
+bord <- dplyr::mutate(bord,
+                      dd_state = dplyr::last(dplyr::first(stringr::str_split(.data$NAME, ","))),
+                      dd_state = stringr::str_to_lower(.data$dd_state),
+                      dd_state = stringr::str_trim(.data$dd_state))
+```
+
+```{r snarf_gdelt, eval=FALSE}
+# working with GDELT data requires installing a package not on CRAN
+remotes::install_github("abresler/gdeltr2", auth_token = NULL)
+
+# this code is cut and pasted from elsewhere, from before I finished documenting it
+# TODO: carve it out into some separate .R files
+# figure out the desired dates, and download ALL OF GDELT 1.0 for those dates
+gdelt_event_urls <- gdeltr2:::get_urls_gdelt_event_log(return_message = FALSE)
+gdelt_event_urls <- dplyr::filter(gdelt_event_urls, 
+                                  .data$periodData >= "200801",
+                                  .data$periodData <= "20181231")
+
+gdelt_event_urls <- dplyr::group_by(gdelt_event_urls, .data$idHash, .data$periodData)
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, fn = stringr::str_remove(.data$urlData, "^.+/"))
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, path = here::here("data", "gdelt", .data$fn))
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, dlStatus = download.file(.data$urlData, .data$path)) # uncomment to download
+```
+```{r ncol_gdelt, eval=FALSE}
+scan_cols <- function(path) {
+  foo <- unzip(path, exdir = tempdir())
+  bar <- readr::read_tsv(foo, FALSE, n_max = 1)
+  
+  boii <- ncol(bar)
+  
+  unlink(foo)
+  
+  boii
+}
+
+system.time(gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, n_cols = scan_cols(.data$path)))
+```
+```{r read_gdelt_functions, eval=FALSE}
+# very slow and primitive way to read tsv file
+# but built-in ways consistently crash the rsession (?!?!)
+read_gsv <- function(foo) {
+  bar <- readLines(foo)
+  
+  unlink(foo) # evil and rude
+  
+  bar <- stringr::str_split(bar, "\\t")
+  bar <- purrr::map(bar, stringr::str_replace, pattern = "^$", replacement = NA_character_)
+  
+  bar <- do.call(rbind, bar)
+  
+  bar <- dplyr::as_tibble(bar, .name_repair = "unique")
+  
+  bar <- dplyr::mutate(bar, dplyr::across(function(x) {all(is.na(x) | !is.na(as.numeric(x)))},                  as.numeric))
+  bar <- dplyr::mutate(bar, dplyr::across(function(x) {all(is.na(x) | !is.na(as.logical(x))) & !is.numeric(x)}, as.logical))
+  
+  bar
+}
+
+read_gdelt <- function(path) {
+  foo <- unzip(path, exdir = tempdir())
+  bar <- read_gsv(foo)
+  
+  # lifted from abresler/gdeltr2
+  names(bar) <- c("idGlobalEvent", "dateEvent", "monthYearEvent", "yearEvent", "dateFraction", "codeActor1", "nameActor1",
+                   "codeISOActor1", "codeCAMEOGroupActor1", "codeCAMEOEthnicityActor1", "codeCAMEOReligionActor1",
+                   "codeCAMEOReligion2Actor1", "codeCAMEOTypeActor1", "codeCAMEOType2Actor1", "codeCAMEOType3Actor1", "codeActor2",
+                   "nameActor2", "codeISOActor2", "codeCAMEOGroupActor2", "codeCAMEOEthnicityActor2", "codeCAMEOReligionActor2",
+                   "codeCAMEOReligion2Actor2", "codeCAMEOTypeActor2", "codeCAMEOType2Actor2", "codeCAMEOType3Actor2", "isRootEvent",
+                   "idCAMEOEvent", "idCAMEOEventBase", "idCAMEOEventRoot", "classQuad", "scoreGoldstein", "countMentions", "countSources",
+                   "countArticles", "avgTone", "idTypeLocationActor1", "locationActor1", "idCountryActor1", "idADM1CodeActor1",
+                   "latitudeActor1", "longitudeActor1", "idFeatureActor1", "idTypeLocationActor2", "locationActor2", "idCountryActor2",
+                   "idADM1CodeActor2", "latitudeActor2", "longitudeActor2", "idFeatureActor2", "idTypeLocationAction", "locationAction",
+                   "idCountryAction", "idADM1CodeAction", "latitudeAction", "longitudeAction", "idFeatureAction", "dateAdded", 
+                   "urlSource")[1:ncol(bar)]
+  
+  dplyr::filter(bar, .data$idCAMEOEventRoot == 14)
+}
+```
+```{r read_gdelt, eval=FALSE}
+system.time(gdelt_event_urls <- suppressMessages(suppressWarnings(dplyr::mutate(gdelt_event_urls, 
+                                                                                gdelt = list(read_gdelt(.data$path))))))
+```
+```{r mung_gdelt, eval=FALSE}
+# add the period to the data proper
+gdelt_event_urls <- dplyr::group_modify(gdelt_event_urls, function(.x, .y) {
+  dplyr::tibble(gdelt = list(dplyr::mutate(dplyr::first(.x$gdelt), periodData = dplyr::first(.y$periodData))))
+})
+
+# this whole thing is to catch mismatched column types that dplyr obviously ought to just convert to character on its own
+gdelt_event_urls <- purrr::reduce(gdelt_event_urls$gdelt, function(x, y) {
+  tryCatch(dplyr::bind_rows(x, y), error = function(e) {
+    X <- sapply(x, class)
+    Y <- sapply(y, class)
+    
+    XX <- names(X)
+    YY <- names(Y)
+    
+    XXX <- XX[X[XX] == Y[XX] | is.na(Y[XX])]
+    YYY <- YY[Y[YY] == X[YY] | is.na(X[YY])]
+    
+    XXXX <- setdiff(XX, XXX)
+    YYYY <- setdiff(YY, YYY)
+    
+    x <- dplyr::mutate(x, dplyr::across(tidyselect::all_of(XXXX), as.character))
+    y <- dplyr::mutate(y, dplyr::across(tidyselect::all_of(YYYY), as.character))
+    
+    dplyr::bind_rows(x, y)
+  })
+})
+
+saveRDS(gdelt_event_urls, here::here("data", "gdelt_event_urls_extra.rds"))
+```
+```{r count_gdelt, eval=FALSE}
+gdelt_event_urls <- readRDS(here::here("data", "gdelt_event_urls_extra.rds"))
+
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls,
+                                  CIV  = stringr::str_detect(.data$codeActor1, "CIV") | 
+                                    stringr::str_detect(.data$codeActor2, "CIV"),
+                                  HRI  = stringr::str_detect(.data$codeActor1, "HRI") | 
+                                    stringr::str_detect(.data$codeActor2, "HRI"),
+                                  LAB  = stringr::str_detect(.data$codeActor1, "LAB") |
+                                    stringr::str_detect(.data$codeActor2, "LAB"),
+                                  CIV  = .data$CIV & !is.na(.data$CIV),
+                                  HRI  = .data$HRI & !is.na(.data$HRI),
+                                  LAB  = .data$LAB & !is.na(.data$LAB),
+                                  both = .data$HRI & .data$LAB,
+                                  none = !.data$HRI & !.data$LAB,
+                                  HRI  = .data$HRI & !.data$both,
+                                  LAB  = .data$LAB & !.data$both)
+gdelt_event_urls <- dplyr::group_by(gdelt_event_urls,
+                                    .data$idCountryAction, 
+                                    .data$idCAMEOEvent,
+                                    .data$CIV,
+                                    .data$yearEvent,
+                                    .data$monthYearEvent, 
+                                    .data$dateEvent,
+                                    .data$latitudeAction,
+                                    .data$longitudeAction)
+
+gdelt_event_sums <- dplyr::summarise(gdelt_event_urls, dplyr::across(tidyselect::all_of(c("HRI", "LAB", "both", "none")), sum))
+saveRDS(gdelt_event_sums, here::here("data", "gdelt_event_sums_extra.rds"))
+```
+
+```{r add_gdelt}
+# itt cargo cult programming
+gdelt_event_sums <- readRDS(here::here("data", "gdelt_event_sums_extra.rds"))
+
+FIPS_10_4 <- readxl::read_excel(here::here("data", "FIPS_10-4.xlsx"))
+FIPS_10_4 <- dplyr::rename(FIPS_10_4,
+                           idCountryAction = .data$Code,
+                           Country         = .data$`Short-form name`)
+
+gdelt_event_sums <- dplyr::left_join(gdelt_event_sums, FIPS_10_4)
+
+yearly_country <- readr::read_csv(here::here("data", "yearly_country.csv"), FALSE)
+yearly_country <- dplyr::rename(yearly_country,
+                                yearEvent       = .data$X1,
+                                idCountryAction = .data$X2,
+                                yearlyNorm      = .data$X3)
+
+gdelt_event_sums <- dplyr::left_join(gdelt_event_sums, yearly_country)
+gdelt_event_sums <- dplyr::mutate(gdelt_event_sums, yearlyNorm = as.integer(.data$yearlyNorm))
+```
+```{r sf_gdelt}
+gdelt_event_sums <- dplyr::filter(gdelt_event_sums, .data$Country == "United States")
+gdelt_event_sums <- dplyr::mutate(gdelt_event_sums, longitudeAction = as.numeric(.data$longitudeAction))
+gdelt_event_sums <- dplyr::group_by(gdelt_event_sums)
+gdelt_event_sums <- dplyr::mutate(gdelt_event_sums, i = dplyr::row_number())
+gdelt_event_sums <- dplyr::group_by(gdelt_event_sums, .data$i)
+gdelt_event_sums <- dplyr::select(gdelt_event_sums, -.data$monthYearEvent, -.data$dateEvent)
+gdelt_event_sums <- dplyr::filter(gdelt_event_sums, dplyr::across(tidyselect::everything(), function(x) {!is.na(x)}))
+
+gdelt_event_sf   <- sf::st_as_sf(gdelt_event_sums, coords = c("longitudeAction", "latitudeAction"), crs = sf::st_crs(bord))
+```
+```{r bord_gdelt}
+gdelt_county <- sf::st_join(gdelt_event_sf, bord) # spatial join to pick out county for each event given coordinates
+gdelt_county <- dplyr::as_tibble(gdelt_county)
+gdelt_county <- dplyr::group_by(gdelt_county, 
+                                .data$yearEvent, 
+                                .data$yearlyNorm, 
+                                .data$dd_state,
+                                .data$NAME, 
+                                .data$GEOID, 
+                                .data$dd_state_fips,
+                                .data$dd_county_fips,
+                                .data$idCountryAction)
+gdelt_county <- dplyr::summarise(gdelt_county, dplyr::across(.data$HRI:.data$none, sum))
+gdelt_county <- dplyr::mutate(gdelt_county, year = as.character(.data$yearEvent))
+```
+```{r gdelt_totals}
+# total up by county-year
+# note that county-years with zero total events have no rows here, which is not ideal
+# let's fix that
+gdelt_twist <- dplyr::group_by(gdelt_county)
+gdelt_twist <- dplyr::select(gdelt_twist,
+                             .data$GEOID,
+                             .data$HRI:.data$year)
+gdelt_twist <- tidyr::pivot_longer(gdelt_twist, .data$HRI:.data$none)
+gdelt_twist <- tidyr::pivot_wider(gdelt_twist, names_from = .data$GEOID, values_fill = 0)
+gdelt_twist <- tidyr::pivot_longer(gdelt_twist, !tidyselect::any_of(c("year", "name")), names_to = "GEOID")
+gdelt_twist <- tidyr::pivot_wider(gdelt_twist, names_from = .data$name, values_fill = 0)
+
+# fortunately GEOID values are unique to counties across years
+gdelt_meta <- dplyr::group_by(gdelt_county, .data$GEOID, .data$dd_state, .data$NAME, .data$dd_state_fips, .data$dd_county_fips)
+gdelt_meta <- dplyr::summarise(gdelt_meta)
+
+gdelt_twist <- dplyr::left_join(gdelt_twist, gdelt_meta)
+
+openxlsx::write.xlsx(gdelt_twist, here::here("data", "events_by_county_year.xlsx"))
+```
+
+
+```{r cces_gdelt}
+cces_gdelt <- dplyr::left_join(CCES, gdelt_county)
+cces_gdelt <- dplyr::mutate(cces_gdelt, dplyr::across(.data$HRI:.data$none, function(x) {ifelse(is.na(x), 0, x)}))
+```
+```{r county_pop}
+cces_years <- dplyr::group_by(cces_gdelt, .data$yearEvent)
+cces_years <- dplyr::summarise(cces_years, .groups="keep")
+
+cces_pop_5 <- dplyr::mutate(cces_years, 
+                            pop = list(try(tidycensus::get_acs("county", 
+                                                               c(county_pop = "B01001_001"),
+                                                               year=dplyr::first(.data$yearEvent)))))
+cces_pop_3 <- dplyr::mutate(cces_years, 
+                            pop = list(try(tidycensus::get_acs("county", 
+                                                               c(county_pop = "B01001_001"),
+                                                               year   = dplyr::first(.data$yearEvent),
+                                                               survey = "acs3"))))
+
+cces_pop_5 <- dplyr::filter(cces_pop_5, sapply(.data$pop, methods::is, class2="data.frame"))
+cces_pop_3 <- dplyr::filter(cces_pop_3, sapply(.data$pop, methods::is, class2="data.frame"))
+
+cces_pop_5 <- tidyr::unnest(cces_pop_5, .data$pop)
+cces_pop_3 <- tidyr::unnest(cces_pop_3, .data$pop)
+
+cces_pop_5 <- dplyr::mutate(cces_pop_5, variable = "county_pop_5yr")
+cces_pop_3 <- dplyr::mutate(cces_pop_3, variable = "county_pop_3yr")
+
+cces_pop <- dplyr::bind_rows(cces_pop_5, cces_pop_3)
+cces_pop <- dplyr::select(cces_pop, -.data$moe)
+cces_pop <- tidyr::pivot_wider(cces_pop, names_from = .data$variable, values_from = .data$estimate)
+
+cces_gdelt <- dplyr::left_join(cces_gdelt, cces_pop)
+```
+```{r save_gdelt}
+
+openxlsx::write.xlsx(cces_gdelt, here::here("data", "cces_with_county_protest_events.xlsx"))
+haven::write_dta(    cces_gdelt, here::here("data", "cces_with_county_protest_events.dta"))
+```

@@ -1,0 +1,219 @@
+---
+title: "Create GDELT data set"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{GDELTprotests}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+# interfacing with gdelt requires installing a package not available on CRAN
+remotes::install_github("abresler/gdeltr2", auth_token = NULL)
+```
+
+```{r world, eval=FALSE}
+world <- readr::read_csv(here::here("data", "ISO.csv"))
+world <- dplyr::group_by(world, dplyr::across(tidyselect::everything()))
+world <- dplyr::mutate(world, shape = list(GADMTools::gadm_sf_loadCountries(.data$ISO, 0, here::here("data", "gadm/"))))
+```
+```{r snarf_gdelt, eval=FALSE}
+# figure out the desired dates, and download ALL OF GDELT 1.0 for those dates
+gdelt_event_urls <- gdeltr2:::get_urls_gdelt_event_log(return_message = FALSE)
+gdelt_event_urls <- dplyr::filter(gdelt_event_urls, 
+                                  .data$periodData >= "201001",
+                                  .data$periodData <= "20151231")
+
+gdelt_event_urls <- dplyr::group_by(gdelt_event_urls, .data$idHash, .data$periodData)
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, fn = stringr::str_remove(.data$urlData, "^.+/"))
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, path = here::here("data", "gdelt", .data$fn))
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, dlStatus = download.file(.data$urlData, .data$path)) # uncomment to download
+```
+```{r ncol_gdelt, eval=FALSE}
+# figure out _only_ the number of columns in each file
+scan_cols <- function(path) {
+  foo <- unzip(path, exdir = tempdir())
+  bar <- readr::read_tsv(foo, FALSE, n_max = 1)
+  
+  boii <- ncol(bar)
+  
+  unlink(foo)
+  
+  boii
+}
+
+system.time(gdelt_event_urls <- dplyr::mutate(gdelt_event_urls, n_cols = scan_cols(.data$path)))
+```
+```{r read_gdelt_functions, eval=FALSE}
+# very slow and primitive way to read tsv file
+# but built-in ways consistently crash the rsession (?!?!)
+read_gsv <- function(foo) {
+  bar <- readLines(foo)
+  
+  unlink(foo) # evil and rude
+  
+  bar <- stringr::str_split(bar, "\\t")
+  bar <- purrr::map(bar, stringr::str_replace, pattern = "^$", replacement = NA_character_)
+  
+  bar <- do.call(rbind, bar)
+  
+  bar <- dplyr::as_tibble(bar, .name_repair = "unique")
+  
+  bar <- dplyr::mutate(bar, dplyr::across(function(x) {all(is.na(x) | !is.na(as.numeric(x)))},                  as.numeric))
+  bar <- dplyr::mutate(bar, dplyr::across(function(x) {all(is.na(x) | !is.na(as.logical(x))) & !is.numeric(x)}, as.logical))
+  
+  bar
+}
+
+# extract GDELT events of interest
+read_gdelt <- function(path) {
+  foo <- unzip(path, exdir = tempdir())
+  bar <- read_gsv(foo)
+  
+  # lifted from abresler/gdeltr2
+  names(bar) <- c("idGlobalEvent", "dateEvent", "monthYearEvent", "yearEvent", "dateFraction", "codeActor1", "nameActor1",
+                   "codeISOActor1", "codeCAMEOGroupActor1", "codeCAMEOEthnicityActor1", "codeCAMEOReligionActor1",
+                   "codeCAMEOReligion2Actor1", "codeCAMEOTypeActor1", "codeCAMEOType2Actor1", "codeCAMEOType3Actor1", "codeActor2",
+                   "nameActor2", "codeISOActor2", "codeCAMEOGroupActor2", "codeCAMEOEthnicityActor2", "codeCAMEOReligionActor2",
+                   "codeCAMEOReligion2Actor2", "codeCAMEOTypeActor2", "codeCAMEOType2Actor2", "codeCAMEOType3Actor2", "isRootEvent",
+                   "idCAMEOEvent", "idCAMEOEventBase", "idCAMEOEventRoot", "classQuad", "scoreGoldstein", "countMentions", "countSources",
+                   "countArticles", "avgTone", "idTypeLocationActor1", "locationActor1", "idCountryActor1", "idADM1CodeActor1",
+                   "latitudeActor1", "longitudeActor1", "idFeatureActor1", "idTypeLocationActor2", "locationActor2", "idCountryActor2",
+                   "idADM1CodeActor2", "latitudeActor2", "longitudeActor2", "idFeatureActor2", "idTypeLocationAction", "locationAction",
+                   "idCountryAction", "idADM1CodeAction", "latitudeAction", "longitudeAction", "idFeatureAction", "dateAdded", 
+                   "urlSource")[1:ncol(bar)]
+  
+  dplyr::filter(bar, .data$idCAMEOEventRoot == 14) # coded protests
+}
+```
+```{r read_gdelt, eval=FALSE}
+system.time(gdelt_event_urls <- suppressMessages(suppressWarnings(dplyr::mutate(gdelt_event_urls, 
+                                                                                gdelt = list(read_gdelt(.data$path))))))
+```
+```{r mung_gdelt, eval=FALSE}
+# add the period to the data proper
+gdelt_event_urls <- dplyr::group_modify(gdelt_event_urls, function(.x, .y) {
+  dplyr::tibble(gdelt = list(dplyr::mutate(dplyr::first(.x$gdelt), periodData = dplyr::first(.y$periodData))))
+})
+
+# this whole thing is to catch mismatched column types that dplyr obviously ought to just convert to character on its own
+gdelt_event_urls <- purrr::reduce(gdelt_event_urls$gdelt, function(x, y) {
+  tryCatch(dplyr::bind_rows(x, y), error = function(e) {
+    X <- sapply(x, class)
+    Y <- sapply(y, class)
+    
+    XX <- names(X)
+    YY <- names(Y)
+    
+    XXX <- XX[X[XX] == Y[XX] | is.na(Y[XX])]
+    YYY <- YY[Y[YY] == X[YY] | is.na(X[YY])]
+    
+    XXXX <- setdiff(XX, XXX)
+    YYYY <- setdiff(YY, YYY)
+    
+    x <- dplyr::mutate(x, dplyr::across(tidyselect::all_of(XXXX), as.character))
+    y <- dplyr::mutate(y, dplyr::across(tidyselect::all_of(YYYY), as.character))
+    
+    dplyr::bind_rows(x, y)
+  })
+})
+
+saveRDS(gdelt_event_urls, here::here("data", "gdelt_event_urls.rds"))
+```
+```{r count_gdelt, eval=FALSE}
+gdelt_event_urls <- readRDS(here::here("data", "gdelt_event_urls.rds"))
+
+gdelt_event_urls <- dplyr::mutate(gdelt_event_urls,
+                                  CIV  = stringr::str_detect(.data$codeActor1, "CIV") |
+                                    stringr::str_detect(.data$codeActor2, "CIV"), # coded civilian (unimportant)
+                                  HRI  = stringr::str_detect(.data$codeActor1, "HRI") |
+                                    stringr::str_detect(.data$codeActor2, "HRI"), # coded human rights
+                                  LAB  = stringr::str_detect(.data$codeActor1, "LAB") | 
+                                    stringr::str_detect(.data$codeActor2, "LAB"), # coded labor
+                                  CIV  = .data$CIV & !is.na(.data$CIV),
+                                  HRI  = .data$HRI & !is.na(.data$HRI),
+                                  LAB  = .data$LAB & !is.na(.data$LAB),
+                                  both = .data$HRI & .data$LAB,
+                                  none = !.data$HRI & !.data$LAB,
+                                  HRI  = .data$HRI & !.data$both,
+                                  LAB  = .data$LAB & !.data$both)
+gdelt_event_urls <- dplyr::group_by(gdelt_event_urls,
+                                    .data$idCountryAction, 
+                                    .data$idCAMEOEvent,
+                                    .data$CIV,
+                                    .data$yearEvent,
+                                    .data$monthYearEvent, 
+                                    .data$dateEvent)
+
+gdelt_event_sums <- dplyr::summarise(gdelt_event_urls, dplyr::across(tidyselect::all_of(c("HRI", "LAB", "both", "none")), sum))
+saveRDS(gdelt_event_sums, here::here("data", "gdelt_event_sums.rds"))
+```
+```{r add_gdelt}
+gdelt_event_sums <- readRDS(here::here("data", "gdelt_event_sums.rds"))
+
+# country names aren't in the downloaded data -- here is a list of them
+FIPS_10_4 <- readxl::read_excel(here::here("data", "FIPS_10-4.xlsx"))
+FIPS_10_4 <- dplyr::rename(FIPS_10_4,
+                           idCountryAction = .data$Code,
+                           Country         = .data$`Short-form name`)
+
+gdelt_event_sums <- dplyr::left_join(gdelt_event_sums, FIPS_10_4)
+
+# yearly normalization value -- the total number of evets GDELT captured by country-year
+yearly_country <- readr::read_csv(here::here("data", "yearly_country.csv"), FALSE)
+yearly_country <- dplyr::rename(yearly_country,
+                                yearEvent       = .data$X1,
+                                idCountryAction = .data$X2,
+                                yearlyNorm      = .data$X3)
+
+gdelt_event_sums <- dplyr::left_join(gdelt_event_sums, yearly_country)
+gdelt_event_sums <- dplyr::mutate(gdelt_event_sums, yearlyNorm = as.integer(.data$yearlyNorm))
+
+gdelt_event_code <- gdeltr2::get_codes_cameo_events()
+gdelt_event_code <- dplyr::select(gdelt_event_code, .data$idCAMEOEvent, .data$descriptionCAMEOEvent)
+gdelt_event_code <- dplyr::mutate(gdelt_event_code, dplyr::across(tidyselect::everything(), as.character))
+gdelt_event_sums <- dplyr::left_join(gdelt_event_sums, gdelt_event_code)
+
+gdelt_event_foo <- dplyr::group_by(gdelt_event_sums,
+                                   .data$descriptionCAMEOEvent,
+                                   .data$Country,
+                                   .data$yearlyNorm,
+                                   .data$yearEvent,
+                                   .data$monthYearEvent,
+                                   .data$dateEvent)
+gdelt_event_bar <- dplyr::group_by(gdelt_event_sums,
+                                   .data$Country,
+                                   .data$yearlyNorm,
+                                   .data$yearEvent,
+                                   .data$monthYearEvent,
+                                   .data$dateEvent)
+
+# recursively sum up by each grouping variable in order, returning a list of tibbles
+resum <- function(x) {
+  uh <- dplyr::last(dplyr::group_vars(x))
+  
+  if(is.na(uh)) {return(list())}
+  
+  message(uh)
+  
+  er <- dplyr::summarise(x, dplyr::across(tidyselect:::where(is.integer), sum))
+  
+  c(`names<-`(list(er), uh), resum(er))
+}
+
+# seems like it doesn't actually take long
+system.time(gdelt_sums_bar <- resum(gdelt_event_bar))
+system.time(gdelt_sums_foo <- resum(gdelt_event_foo))
+```
+```{r save_gdelt}
+openxlsx::write.xlsx(gdelt_sums_bar, here::here("data", "event_count_total.xlsx"))
+openxlsx::write.xlsx(gdelt_sums_foo, here::here("data", "event_count_by_type.xlsx"))
+```
+
+###### Foo!
+
