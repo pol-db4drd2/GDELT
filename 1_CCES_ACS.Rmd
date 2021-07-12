@@ -48,64 +48,6 @@ cols <- dplyr::mutate(cols, data = list(
   do.call(dplyr::select, c(list(.data = dplyr::first(.data$data)), dplyr::first(.data$cols)))
 ))
 ```
-```{r tabulate_cces, eval=FALSE, include=FALSE}
-# tabs <- dplyr::select(tabs, .data$data)
-# tabs <- dplyr::mutate(tabs, data = list(dplyr::mutate_if(dplyr::first(.data$data), haven::is.labelled, haven::as_factor)))
-# tabs <- dplyr::mutate(tabs, data = list(dplyr::mutate_all(dplyr::first(.data$data), as.character))) # look out
-# tabs <- tidyr::unnest(tabs, .data$data)
-# tabs <- dplyr::mutate_all(tabs, stringr::str_to_lower)
-# 
-# tabs <- dplyr::select(cols, 
-#                       -.data$ww_weight, 
-#                       -.data$dd_county_fips, 
-#                       -.data$dd_county_name, 
-#                       -.data$dd_months_in_city, 
-#                       -.data$dd_years_in_city)
-# tabs <- tidyr::gather(tabs, "var", "val", -.data$year)
-# tabs <- dplyr::group_by(tabs, .data$var)
-# tabs <- dplyr::summarise(tabs, tab = list(table(.data$val, .data$year)))
-# tabs <- dplyr::group_by(tabs, .data$var)
-# tabs <- dplyr::mutate(tabs, tab = list(dplyr::first(.data$tab)[, colSums(dplyr::first(.data$tab)) > 0, drop=FALSE]))
-# # tabs <- dplyr::mutate(tabs, kable = paste(knitr::kable(dplyr::first(.data$tab), align="r"), collapse="\n"))
-# tabs <- dplyr::mutate(tabs, kable = list(pander::pandoc.table.return(dplyr::first(.data$tab),
-#                                                                      justify="right",
-#                                                                      style="multiline", 
-#                                                                      split.tables=Inf)))
-# tabs <- dplyr::mutate(tabs, kable = paste0("\\blimp\n\n## ", .data$var, "\n\n", .data$kable, "\n\n\\elimp\n\n"))
-# 
-# invisible(lapply(tabs$kable, cat))
-```
-```{r tabulate_cols, eval=FALSE, include=FALSE}
-# tabs <- dplyr::select(cols, .data$data)
-# tabs <- dplyr::mutate(tabs, data = list(dplyr::select_if(dplyr::first(.data$data), haven::is.labelled)))
-# # tabs <- dplyr::mutate(tabs, data = list(dplyr::mutate_all(dplyr::first(.data$data), haven::as_factor)))
-# tabs <- dplyr::mutate(tabs, data = list(dplyr::summarise_all(dplyr::first(.data$data), function(x) {list(attr(x, "labels", TRUE))})))
-# tabs <- tidyr::unnest(tabs, .data$data)
-# tabs <- dplyr::select(tabs, -.data$dd_state)
-# tabs <- tidyr::gather(tabs, "var", "labs", -.data$year)
-# tabs <- dplyr::filter(tabs, !sapply(.data$labs, is.null))
-# tabs <- dplyr::group_by(tabs, .data$var, add=TRUE)
-# tabs <- dplyr::mutate(tabs, labs = list(`names<-`(names(dplyr::first(.data$labs)), dplyr::first(.data$labs))))
-# tabs <- dplyr::mutate(tabs, labs = list(as.list(dplyr::first(.data$labs))))
-# tabs <- dplyr::mutate(tabs, labs = list(dplyr::as_tibble(dplyr::first(.data$labs))))
-# tabs <- dplyr::group_by(tabs, .data$var)
-# tabs <- tidyr::nest(tabs)
-# tabs <- dplyr::mutate(tabs, data = list(tidyr::unnest(dplyr::first(.data$data))))
-# 
-# tabs <- dplyr::mutate(tabs, kable = list(pander::pandoc.table.return(dplyr::first(.data$data),
-#                                                                      justify="right",
-#                                                                      style="multiline", 
-#                                                                      split.tables=Inf)))
-# tabs <- dplyr::mutate(tabs, kable = paste0("\\blimp\n\n## ", .data$var, "\n\n", .data$kable, "\n\n\\elimp\n\n"))
-# tabs <- dplyr::arrange(tabs,
-#                        !.data$var <= "dd_education",
-#                        !.data$var == "dd_gender",
-#                        !.data$var <= "dd_race",
-#                        !.data$var == "dd_religiosity",
-#                        .data$var)
-# 
-# invisible(lapply(tabs$kable, cat))
-```
 ```{r mend_cols_cces}
 # iron out trivial differences in factor labels across years ----
 # otherwise they won't tidyr::unnest() together
