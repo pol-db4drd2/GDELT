@@ -237,6 +237,7 @@ saveRDS(set, here::here("data", "cces.rds"))
 ####### <!-- text -->
 
 ```{r finish_set}
+aca <- readRDS(here::here("data", "ACS.rds"))
 all <- dplyr::left_join(set, aca)
 
 haven::write_dta(all, here::here("data", "cces", "CCES_with_ACS.dta"))
