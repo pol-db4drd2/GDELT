@@ -176,10 +176,135 @@ set <- dplyr::mutate(set, dd_county_fips = .data$dd_county_fips %% 1000)
 saveRDS(set, here::here("data", "cces.rds"))
 ```
 
-####### <!-- text -->
+######## <!-- process acs -->
+
+```{r init_acs}
+# variables ----
+# urban/rural can be obtained only from the 2010 census
+act <- c(n       = "B02001_001", # tract-level variables
+         n_white = "B02001_002",
+         n_black = "B02001_003",
+         w_poor  = "B17001A_002",
+         w_other = "B17001A_031",
+         n_poor  = "B17001_002",
+         n_other = "B17001_031")
+acc <- c(m_indus = "C24030_002", # county-level variables
+         f_indus = "C24030_029",
+         m_manuf = "C24030_007",
+         f_manuf = "C24030_034")
+
+# table of state-years ----
+# TODO: cleanly separate ACS and CCES parts into two files
+acs <- dplyr::group_by(set)
+acs <- dplyr::select(acs, .data$year, .data$dd_state)
+acs <- dplyr::group_by_all(acs)
+acs <- dplyr::summarise(acs)
+acs <- dplyr::filter(acs, .data$year > 2008)
+acs <- dplyr::group_by_all(acs)
+
+# download county-level vars ----
+system.time({
+  acs <- dplyr::mutate(acs, county_pop = list(tidycensus::get_acs("county",
+                                                                  acc,
+                                                                  year  = as.numeric(dplyr::first(.data$year)),
+                                                                  state = dplyr::first(.data$dd_state))))
+})
+
+# prod county-level cars into shape and group by county-year ----
+acs <- tidyr::unnest(acs)
+acs <- dplyr::select(acs, -.data$moe)
+acs <- tidyr::spread(acs, .data$variable, .data$estimate)
+acs <- dplyr::rename(acs,
+                     dd_county_fips = .data$GEOID,
+                     dd_county_name = .data$NAME)
+acs <- dplyr::mutate(acs, dd_county_fips = as.numeric(.data$dd_county_fips) %% 1000)
+acs <- dplyr::mutate(acs, dd_county_name = stringr::str_remove(.data$dd_county_name, 
+                                                               paste(",", stringr::str_to_title(.data$dd_state))))
+acs <- dplyr::mutate(acs, dd_county_name = stringr::str_remove(.data$dd_county_name, ", District of Columbia"))
+acs <- dplyr::group_by(acs, .data$year, .data$dd_state, .data$dd_county_fips, .data$dd_county_name)
+```
+```{r download_acs_more}
+# tract-level data are where segregation stats come from ----
+# download tract-level vars by county-year and _save_ ----
+dir.create(here::here("data", "cces", "tract"))
+
+# this may error out unexpectedly while downloading. Just restart it
+foo <- function(yr, st, id) {
+  fn <- paste0(here::here("data", "cces", "tract"), "/", paste0(c(yr, st, id), collapse="_"), ".rds")
+  
+  if(file.exists(fn)) {} else {ds <- tidycensus::get_acs("tract", act, year = yr, state = st, county = id)}
+  if(file.exists(fn)) {} else {saveRDS(ds, fn)}
+  
+  fn
+}
+
+system.time(acr <- dplyr::mutate(acs, tract = foo(as.numeric(.data$year), .data$dd_state, .data$dd_county_fips)))
+```
+```{r reload_acs}
+# reload tract-level vars ----
+system.time(acr <- dplyr::transmute(acr, tract = list(readRDS(dplyr::first(.data$tract)))))
+system.time(acr <- dplyr::group_modify(acr, function(.x, .y) {dplyr::first(.x$tract)})) # far faster than using tidyr::unnest
+
+acr <- dplyr::select(acr, -.data$moe, -.data$NAME)
+acr <- tidyr::spread(acr, .data$variable, .data$estimate)
+
+# compute derived county-level values ----
+acr <- dplyr::summarise(acr,
+                        pct_white_tot  = sum(.data$n_white) / sum(.data$n),
+                        pct_black_tot  = sum(.data$n_black) / sum(.data$n),
+                        pct_white_b_w  = sum(.data$n_white) / sum(.data$n_white + .data$n_black),
+                        pct_black_b_w  = sum(.data$n_black) / sum(.data$n_white + .data$n_black),
+                        pct_poor_total = sum(.data$n_poor)  / sum(.data$n_poor  + .data$n_other),
+                        pct_poor_white = sum(.data$w_poor)  / sum(.data$w_poor  + .data$w_other),
+                        dissim_racial  = sum(abs(.data$n_black / sum(.data$n_black) - .data$n_white / sum(.data$n_white))) / 2,
+                        dissim_pov_tot = sum(abs(.data$n_poor  / sum(.data$n_poor)  - .data$n_other / sum(.data$n_other))) / 2,
+                        dissim_pov_wht = sum(abs(.data$w_poor  / sum(.data$w_poor)  - .data$w_other / sum(.data$w_other))) / 2,
+                        pop_white      = sum(.data$n_white),
+                        pop_black      = sum(.data$n_black),
+                        population     = sum(.data$n),
+                        log_population = log(.data$population),
+                        pop_poor_tot   = sum(.data$n_poor),
+                        pop_poor_wht   = sum(.data$w_poor),
+                        pop_other_tot  = sum(.data$n_other),
+                        pop_other_wht  = sum(.data$w_other))
+
+# tack on per-year as well as current-year county-level values ----
+acy <- tidyr::pivot_wider(acr, names_from = .data$year, values_from = .data$pct_white_tot:.data$dissim_pov_wht)
+acq <- dplyr::left_join(acr, acy)
+
+# do the same thing for the pct manufacturing ----
+acu <- dplyr::transmute(acs, pct_mfg = (.data$f_manuf + .data$m_manuf) / (.data$f_indus + .data$m_indus))
+acv <- tidyr::pivot_wider(acu, names_from = .data$year, names_prefix = "pct_mfg_", values_from = .data$pct_mfg)
+acu <- dplyr::left_join(acu, acv)
+
+# now what about the rural-urban business? ----
+dec <- dplyr::group_by(acs, .data$dd_state)
+dec <- dplyr::summarise(dec)
+dec <- dplyr::group_by_all(dec)
+dec <- dplyr::mutate(dec,
+                     urban = list(tidycensus::get_decennial("county", 
+                                                            c(urban = "H002001", rural = "H002005"), 
+                                                            state = dplyr::first(.data$dd_state))))
+dec <- tidyr::unnest(dec)
+dec <- dplyr::group_by(dec)
+dec <- dplyr::select(dec, -.data$NAME)
+dec <- dplyr::rename(dec, dd_county_fips = .data$GEOID)
+dec <- dplyr::mutate(dec, dd_county_fips = as.numeric(.data$dd_county_fips) %% 1000)
+dec <- tidyr::spread(dec, .data$variable, .data$value)
+dec <- dplyr::group_by(dec, .data$dd_state, .data$dd_county_fips)
+dec <- dplyr::transmute(dec, pct_urban_2010 = .data$urban / (.data$urban + .data$rural))
+
+# staple together ----
+aca <- dplyr::left_join(acq, acu)
+aca <- dplyr::left_join(aca, dec)
+
+saveRDS(aca, here::here("data", "ACS.rds"))
+```
+
+
+####### <!-- join together -->
 
 ```{r finish_set}
-aca <- readRDS(here::here("data", "ACS.rds"))
 all <- dplyr::left_join(set, aca)
 
 haven::write_dta(all, here::here("data", "cces", "CCES_with_ACS.dta"))
