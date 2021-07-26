@@ -33,9 +33,12 @@ bord <- dplyr::mutate(bord,
 # working with GDELT data requires installing a package not on CRAN
 remotes::install_github("abresler/gdeltr2", auth_token = NULL)
 
+dir.create(here::here("data", "gdelt")) # create folder to hold raw gdelt downloads
+
 # this code is cut and pasted from elsewhere, from before I finished documenting it
 # TODO: carve it out into some separate .R files
 # figure out the desired dates, and download ALL OF GDELT 1.0 for those dates
+# this will be about 30 GB of files and will take about 2 hours
 gdelt_event_urls <- gdeltr2:::get_urls_gdelt_event_log(return_message = FALSE)
 gdelt_event_urls <- dplyr::filter(gdelt_event_urls, 
                                   .data$periodData >= "200801",
@@ -102,6 +105,8 @@ read_gdelt <- function(path) {
 }
 ```
 ```{r read_gdelt, eval=FALSE}
+# this may take hours and hours, because the above reader is slow
+# (but, again, doesn't fail on these files, unlike `read.table()`)
 system.time(gdelt_event_urls <- suppressMessages(suppressWarnings(dplyr::mutate(gdelt_event_urls, 
                                                                                 gdelt = list(read_gdelt(.data$path))))))
 ```
@@ -243,6 +248,8 @@ cces_gdelt <- dplyr::mutate(cces_gdelt, dplyr::across(.data$HRI:.data$none, func
 cces_years <- dplyr::group_by(cces_gdelt, .data$yearEvent)
 cces_years <- dplyr::summarise(cces_years, .groups="keep")
 
+# 5- and 3-year data products are available only for some years each
+# errors will appear on attempting to get them for other years. this is normal
 cces_pop_5 <- dplyr::mutate(cces_years, 
                             pop = list(try(tidycensus::get_acs("county", 
                                                                c(county_pop = "B01001_001"),

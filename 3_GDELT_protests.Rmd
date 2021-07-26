@@ -92,6 +92,7 @@ read_gdelt <- function(path) {
 }
 ```
 ```{r read_gdelt, eval=FALSE}
+# as in file 2, this takes hours and hours, because it uses the slow file reader defined above
 system.time(gdelt_event_urls <- suppressMessages(suppressWarnings(dplyr::mutate(gdelt_event_urls, 
                                                                                 gdelt = list(read_gdelt(.data$path))))))
 ```

@@ -179,6 +179,10 @@ saveRDS(set, here::here("data", "cces.rds"))
 ######## <!-- process acs -->
 
 ```{r init_acs}
+# Registering and installing a Census API key is required
+# go to https://api.census.gov/data/key_signup.html to get one if you don't have it
+# then enter tidycensus::census_api_key("<your key>", install=TRUE) to install your key
+
 # variables ----
 # urban/rural can be obtained only from the 2010 census
 act <- c(n       = "B02001_001", # tract-level variables
