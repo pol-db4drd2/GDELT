@@ -3,10 +3,8 @@ GDELT.Rproj
 .Rhistory
 .Rproj.user
 data/cces/main/*
-data/cces/CCES_with_ACS.dta
-data/cces_with_county_protest_events.dta
-data/cces_with_county_protest_events.xlsx
 data/gdelt_event_urls_extra.rds
 data/gdelt_event_urls.rds
 data/gdelt/*
 .Rproj.user
+.gitignore.bak

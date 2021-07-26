@@ -1,6 +1,11 @@
 # GDELT
 GDELT and ACS data by county-year with CCES
 
+You **must** install **[Git LFS](https://git-lfs.github.com/)** to get this repo.
+
+  * Git LFS is required for the three large output data files.
+  * Visit [https://git-lfs.github.com/] for instructions.
+
 The code is in the four R Markdown files. Open them and step through them in order (don't try to knit them).
 
 Don't forget to register and install a Census API key before proceeding!
